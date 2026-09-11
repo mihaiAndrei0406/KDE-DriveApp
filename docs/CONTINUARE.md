@@ -35,6 +35,9 @@ Last updated: 2026-09-11.
   initial public commit.
 - Previous live acceptance created and restored one synthetic disposable fixture.
   This public-release work does not authorize or perform another remote write.
+- Public repository `mihaiAndrei0406/KDE-DriveApp` now exists on `main`. GitHub
+  confirmed initial revision `ebe1d5cc0175db132791c9461eefc0b3b7b7936e` and the
+  MIT license file.
 
 ## Local runtime state at the start of this change
 
@@ -45,13 +48,9 @@ Last updated: 2026-09-11.
 
 ## Resume order
 
-1. Finish the public-tree documentation and security review, then run all checks.
-2. Initialize Git, review the exact staged tree, and create the initial commit.
-3. Authenticate GitHub CLI through the user's browser; never exchange a token,
-   password, or 2FA value in chat.
-4. Create and push public repository `mihaiAndrei0406/KDE-DriveApp` under the
-   selected MIT license.
-5. In a later session, visually validate live history with a disposable project,
+1. Keep the installed service on its last validated configuration until the owner
+   explicitly previews and applies the documented public-policy migration.
+2. In a later session, visually validate live history with a disposable project,
    then design phase 5b.2 selective file/subdirectory restore.
 
 ## Planned features, still inactive

@@ -155,5 +155,11 @@ could reveal operational metadata.
   smoke, and a generic installer preview. No remote operation was performed.
 - The 49-file staged tree passed whitespace and public identity/secret review;
   ignored personal documents, environments, agent metadata, and build output are
-  absent. The owner selected the MIT license. Initial commit, push, and remote
-  verification remain before handoff.
+  absent. The owner selected the MIT license.
+- GitHub CLI authentication completed through the official browser device flow;
+  no password, token, or 2FA value was exchanged. Repository-local Git identity
+  uses the account's `users.noreply.github.com` address.
+- Initial commit `ebe1d5cc0175db132791c9461eefc0b3b7b7936e` was pushed to public
+  `mihaiAndrei0406/KDE-DriveApp` on `main`. GitHub returned the same revision and
+  the expected MIT license file. No service, mount, credentials, or remote backup
+  data was changed.

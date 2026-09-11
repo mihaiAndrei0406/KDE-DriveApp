@@ -47,12 +47,13 @@ advisory and license database has not been run, and `/usr/local/bin/rclone`
 provider provenance has not been revalidated. Routine autostart remains unapproved
 until this is completed or explicitly accepted.
 
-### AUD-03 — Git metadata absent (MEDIUM, in remediation)
+### AUD-03 — Git metadata absent (MEDIUM, closed)
 
 The supplied `.git` directory was empty, so previous changes had no reproducible
-commit history or diff. Public-tree review and test evidence are being established
-before an initial Git commit. This finding closes only after the reviewed commit is
-pushed and its GitHub revision can be verified.
+commit history or diff. The rebuilt 49-file tree passed public identity/secret and
+whitespace review, was committed under MIT, and was pushed to public `main`.
+GitHub independently returned revision
+`ebe1d5cc0175db132791c9461eefc0b3b7b7936e` and the expected license file.
 
 ### AUD-04 — same-UID D-Bus callers (LOW/MEDIUM, accepted model limit)
 
@@ -97,4 +98,5 @@ No CRITICAL/HIGH finding was observed. The explicit disposable MVP is functional
 and its secret/IPC/mount/backup controls have direct evidence. Routine unattended
 use and autostart remain unapproved until supply-chain review and controlled
 failure testing. The public release may be published as an auditable development
-checkpoint once the reviewed MIT-licensed commit and remote revision are verified.
+checkpoint. Its reviewed MIT-licensed commit and remote revision are verified;
+the open medium findings above still block routine unattended use and autostart.
