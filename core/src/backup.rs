@@ -31,7 +31,10 @@ pub const REPOSITORY: &str = "rclone:hetzner-crypt:HetznerDrive-Backup-Disposabl
 const MAX_REGISTRY_BYTES: u64 = 1024 * 1024;
 const MAX_PROJECTS: usize = 32;
 const MAX_OUTPUT_LINE: usize = 1024 * 1024;
+const MAX_CAPTURE_OUTPUT: usize = 4 * 1024 * 1024;
 const MAX_SNAPSHOT_HISTORY: usize = 256;
+const MAX_SNAPSHOT_ENTRIES: usize = 2048;
+const MAX_SNAPSHOT_PATH: usize = 4096;
 
 #[derive(Clone)]
 pub struct BackupPaths {
@@ -89,6 +92,13 @@ pub struct SnapshotEntry {
     pub created_at: String,
     pub files: u64,
     pub bytes: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SnapshotTreeEntry {
+    pub path: String,
+    pub kind: String,
+    pub size: u64,
 }
 
 impl Default for BackupStatus {
@@ -156,6 +166,19 @@ struct ResticSnapshotSummary {
 }
 
 #[derive(Deserialize)]
+struct ResticLsRecord {
+    struct_type: String,
+    id: Option<String>,
+    paths: Option<Vec<String>>,
+    #[serde(default)]
+    tags: Vec<String>,
+    path: Option<String>,
+    #[serde(rename = "type")]
+    node_type: Option<String>,
+    size: Option<u64>,
+}
+
+#[derive(Deserialize)]
 struct ProgressMessage {
     #[serde(default)]
     message_type: String,
@@ -175,6 +198,7 @@ pub struct BackupManager {
     paths: BackupPaths,
     repository_secret: Mutex<Option<Arc<SessionSecret>>>,
     snapshot_catalog: Mutex<HashMap<String, HashSet<String>>>,
+    snapshot_entry_catalog: Mutex<HashMap<(String, String), HashSet<String>>>,
     status: Mutex<BackupStatus>,
     busy: AtomicBool,
 }
@@ -190,6 +214,7 @@ impl BackupManager {
             paths,
             repository_secret: Mutex::new(None),
             snapshot_catalog: Mutex::new(HashMap::new()),
+            snapshot_entry_catalog: Mutex::new(HashMap::new()),
             status: Mutex::new(BackupStatus::default()),
             busy: AtomicBool::new(false),
         })
@@ -220,6 +245,7 @@ impl BackupManager {
     pub async fn lock(&self) {
         self.repository_secret.lock().await.take();
         self.snapshot_catalog.lock().await.clear();
+        self.snapshot_entry_catalog.lock().await.clear();
         let mut status = self.status.lock().await;
         status.repository_unlocked = false;
         if !status.busy {
@@ -298,6 +324,90 @@ impl BackupManager {
         ))
     }
 
+    pub async fn demo_snapshot_entries(
+        &self,
+        project_id: &str,
+        snapshot_id: &str,
+    ) -> Result<(Vec<SnapshotTreeEntry>, bool), &'static str> {
+        if !self.demo || !valid_project_id(project_id) || !valid_snapshot_id(snapshot_id) {
+            return Err("backup_snapshot_unavailable");
+        }
+        let allowed = self
+            .snapshot_catalog
+            .lock()
+            .await
+            .get(project_id)
+            .is_some_and(|entries| entries.contains(snapshot_id));
+        if !allowed {
+            return Err("backup_snapshot_unavailable");
+        }
+        let entries = vec![
+            SnapshotTreeEntry {
+                path: "README.md".into(),
+                kind: "file".into(),
+                size: 384,
+            },
+            SnapshotTreeEntry {
+                path: "src".into(),
+                kind: "dir".into(),
+                size: 0,
+            },
+            SnapshotTreeEntry {
+                path: "src/main.rs".into(),
+                kind: "file".into(),
+                size: 640,
+            },
+        ];
+        self.snapshot_entry_catalog.lock().await.insert(
+            (project_id.into(), snapshot_id.into()),
+            entries.iter().map(|entry| entry.path.clone()).collect(),
+        );
+        Ok((entries, false))
+    }
+
+    pub async fn start_demo_selective_restore(
+        self: &Arc<Self>,
+        project_id: &str,
+        snapshot_id: &str,
+        selected_path: &str,
+    ) -> (bool, String) {
+        if !valid_project_id(project_id)
+            || !valid_snapshot_id(snapshot_id)
+            || !valid_snapshot_relative_path(selected_path)
+        {
+            return (false, "backup_entry_unavailable".into());
+        }
+        let snapshot_allowed = self
+            .snapshot_catalog
+            .lock()
+            .await
+            .get(project_id)
+            .is_some_and(|entries| entries.contains(snapshot_id));
+        let entry_allowed = self
+            .snapshot_entry_catalog
+            .lock()
+            .await
+            .get(&(project_id.into(), snapshot_id.into()))
+            .is_some_and(|entries| entries.contains(selected_path));
+        if !snapshot_allowed || !entry_allowed {
+            return (false, "backup_entry_unavailable".into());
+        }
+        if let Err(code) = self.begin("restoring", project_id).await {
+            return (false, code.into());
+        }
+        let mut status = self.status.lock().await;
+        status.last_snapshot = snapshot_id.into();
+        status.restore_path = "/tmp/hetzner-drive-demo-restore".into();
+        drop(status);
+        let manager = self.clone();
+        let id = project_id.to_owned();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            manager.complete_demo(&id, "restore_complete").await;
+        });
+        (true, "accepted".into())
+    }
+
     pub async fn list_snapshots(
         &self,
         project_id: &str,
@@ -312,6 +422,11 @@ impl BackupManager {
         }
         self.dependencies()?;
         let project = load_project(&self.paths, project_id, false)?;
+        self.snapshot_catalog.lock().await.remove(project_id);
+        self.snapshot_entry_catalog
+            .lock()
+            .await
+            .retain(|(catalog_project, _), _| catalog_project != project_id);
         self.begin("history", project_id).await?;
         let result = self
             .run_restic_capture(
@@ -336,6 +451,75 @@ impl BackupManager {
             self.snapshot_catalog.lock().await.insert(
                 project_id.into(),
                 entries.iter().map(|entry| entry.id.clone()).collect(),
+            );
+        }
+        self.busy.store(false, Ordering::Release);
+        let mut status = self.status.lock().await;
+        status.busy = false;
+        match &result {
+            Ok(_) => {
+                status.phase = "ready".into();
+                status.last_error.clear();
+            }
+            Err(code) => {
+                status.phase = "failed".into();
+                status.last_error = (*code).into();
+            }
+        }
+        result
+    }
+
+    pub async fn list_snapshot_entries(
+        &self,
+        project_id: &str,
+        snapshot_id: &str,
+        config: &EncryptedConfig,
+        config_password: &SessionSecret,
+    ) -> Result<(Vec<SnapshotTreeEntry>, bool), &'static str> {
+        let Some(repository_password) = self.repository_secret.lock().await.clone() else {
+            return Err("backup_repository_locked");
+        };
+        if !valid_project_id(project_id) || !valid_snapshot_id(snapshot_id) {
+            return Err("backup_snapshot_unavailable");
+        }
+        let allowed = self
+            .snapshot_catalog
+            .lock()
+            .await
+            .get(project_id)
+            .is_some_and(|entries| entries.contains(snapshot_id));
+        if !allowed {
+            return Err("backup_snapshot_unavailable");
+        }
+        self.snapshot_entry_catalog
+            .lock()
+            .await
+            .remove(&(project_id.into(), snapshot_id.into()));
+        self.dependencies()?;
+        let project = load_project(&self.paths, project_id, false)?;
+        self.begin("contents", project_id).await?;
+        let result = self
+            .run_restic_capture(
+                vec![
+                    "ls".into(),
+                    "--json".into(),
+                    "--recursive".into(),
+                    "--sort".into(),
+                    "name".into(),
+                    snapshot_id.into(),
+                    project.path.clone(),
+                ],
+                config,
+                config_password,
+                &repository_password,
+            )
+            .await
+            .map_err(|_| "backup_contents_failed")
+            .and_then(|bytes| parse_snapshot_entries(&bytes, &project, snapshot_id));
+        if let Ok((entries, _)) = &result {
+            self.snapshot_entry_catalog.lock().await.insert(
+                (project_id.into(), snapshot_id.into()),
+                entries.iter().map(|entry| entry.path.clone()).collect(),
             );
         }
         self.busy.store(false, Ordering::Release);
@@ -469,7 +653,7 @@ impl BackupManager {
         if let Err(code) = self.begin("backup", project_id).await {
             return (false, code.into());
         }
-        if let Err(code) = secrets::confirm_backup_action(false).await {
+        if let Err(code) = secrets::confirm_backup_action(false, false).await {
             self.finish_job(Err(code), "backup_complete").await;
             return (false, code.into());
         }
@@ -490,6 +674,36 @@ impl BackupManager {
         config: Arc<EncryptedConfig>,
         config_password: Arc<SessionSecret>,
     ) -> (bool, String) {
+        self.start_restore_inner(project_id, snapshot_id, None, config, config_password)
+            .await
+    }
+
+    pub async fn start_selective_restore(
+        self: &Arc<Self>,
+        project_id: &str,
+        snapshot_id: &str,
+        selected_path: &str,
+        config: Arc<EncryptedConfig>,
+        config_password: Arc<SessionSecret>,
+    ) -> (bool, String) {
+        self.start_restore_inner(
+            project_id,
+            snapshot_id,
+            Some(selected_path),
+            config,
+            config_password,
+        )
+        .await
+    }
+
+    async fn start_restore_inner(
+        self: &Arc<Self>,
+        project_id: &str,
+        snapshot_id: &str,
+        selected_path: Option<&str>,
+        config: Arc<EncryptedConfig>,
+        config_password: Arc<SessionSecret>,
+    ) -> (bool, String) {
         let Some(repository_password) = self.repository_secret.lock().await.clone() else {
             return (false, "backup_repository_locked".into());
         };
@@ -498,6 +712,9 @@ impl BackupManager {
         }
         if !valid_snapshot_id(snapshot_id) {
             return (false, "backup_snapshot_unavailable".into());
+        }
+        if selected_path.is_some_and(|path| !valid_snapshot_relative_path(path)) {
+            return (false, "backup_entry_unavailable".into());
         }
         let project = match load_project(&self.paths, project_id, false) {
             Ok(project) => project,
@@ -512,13 +729,24 @@ impl BackupManager {
         if !allowed {
             return (false, "backup_snapshot_unavailable".into());
         }
+        if let Some(path) = selected_path {
+            let allowed = self
+                .snapshot_entry_catalog
+                .lock()
+                .await
+                .get(&(project_id.into(), snapshot_id.into()))
+                .is_some_and(|entries| entries.contains(path));
+            if !allowed {
+                return (false, "backup_entry_unavailable".into());
+            }
+        }
         let snapshot = snapshot_id.to_owned();
         if let Err(code) = self.begin("restoring", project_id).await {
             return (false, code.into());
         }
         self.status.lock().await.last_snapshot = snapshot.clone();
         if !self.demo
-            && let Err(code) = secrets::confirm_backup_action(true).await
+            && let Err(code) = secrets::confirm_backup_action(true, selected_path.is_some()).await
         {
             self.finish_job(Err(code), "restore_complete").await;
             return (false, code.into());
@@ -541,18 +769,11 @@ impl BackupManager {
             return (true, "accepted".into());
         }
         let manager = self.clone();
-        let snapshot_path = format!("{snapshot}:{}", project.path);
+        let arguments = restore_arguments(&snapshot, &project.path, selected_path, &target);
         tokio::spawn(async move {
             let result = manager
                 .run_restic(
-                    vec![
-                        "restore".into(),
-                        snapshot_path,
-                        "--target".into(),
-                        target.to_string_lossy().into_owned(),
-                        "--verify".into(),
-                        "--json".into(),
-                    ],
+                    arguments,
                     &config,
                     &config_password,
                     &repository_password,
@@ -886,7 +1107,7 @@ async fn read_restic_output<R: AsyncRead + Unpin>(
             return Err("restic_output_limit");
         }
         if capture {
-            if parsed.captured.len().saturating_add(line.len()) > MAX_OUTPUT_LINE {
+            if parsed.captured.len().saturating_add(line.len()) > MAX_CAPTURE_OUTPUT {
                 line.zeroize();
                 return Err("restic_output_limit");
             }
@@ -981,6 +1202,85 @@ fn parse_snapshot_history(
     entries.sort_by(|left, right| right.created_at.cmp(&left.created_at));
     let truncated = entries.len() > MAX_SNAPSHOT_HISTORY;
     entries.truncate(MAX_SNAPSHOT_HISTORY);
+    Ok((entries, truncated))
+}
+
+fn parse_snapshot_entries(
+    bytes: &[u8],
+    project: &Project,
+    snapshot_id: &str,
+) -> Result<(Vec<SnapshotTreeEntry>, bool), &'static str> {
+    let project_tag = format!("project:{}", project.id);
+    let project_root = Path::new(&project.path);
+    let mut snapshot_seen = false;
+    let mut seen = HashSet::new();
+    let mut entries = Vec::new();
+    for line in bytes
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+    {
+        let record: ResticLsRecord =
+            serde_json::from_slice(line).map_err(|_| "backup_contents_invalid")?;
+        match record.struct_type.as_str() {
+            "snapshot" => {
+                if snapshot_seen
+                    || record.id.as_deref() != Some(snapshot_id)
+                    || record
+                        .paths
+                        .as_ref()
+                        .is_none_or(|paths| paths.as_slice() != [project.path.as_str()])
+                    || !record.tags.iter().any(|tag| tag == "hetzner-drive")
+                    || !record.tags.iter().any(|tag| tag == &project_tag)
+                {
+                    return Err("backup_contents_invalid");
+                }
+                snapshot_seen = true;
+            }
+            "node" => {
+                if !snapshot_seen {
+                    return Err("backup_contents_invalid");
+                }
+                let path = record.path.ok_or("backup_contents_invalid")?;
+                let full_path = Path::new(&path);
+                let relative = full_path
+                    .strip_prefix(project_root)
+                    .map_err(|_| "backup_contents_invalid")?;
+                if relative.as_os_str().is_empty() {
+                    continue;
+                }
+                let relative = relative.to_str().ok_or("backup_contents_invalid")?;
+                if !valid_snapshot_relative_path(relative) {
+                    return Err("backup_contents_invalid");
+                }
+                let Some(kind) = record.node_type.as_deref() else {
+                    return Err("backup_contents_invalid");
+                };
+                if !matches!(kind, "file" | "dir") {
+                    continue;
+                }
+                if !seen.insert(relative.to_owned()) {
+                    return Err("backup_contents_invalid");
+                }
+                let size = if kind == "file" {
+                    record.size.ok_or("backup_contents_invalid")?
+                } else {
+                    record.size.unwrap_or(0)
+                };
+                entries.push(SnapshotTreeEntry {
+                    path: relative.into(),
+                    kind: kind.into(),
+                    size,
+                });
+            }
+            _ => return Err("backup_contents_invalid"),
+        }
+    }
+    if !snapshot_seen {
+        return Err("backup_contents_invalid");
+    }
+    entries.sort_by(|left, right| left.path.cmp(&right.path));
+    let truncated = entries.len() > MAX_SNAPSHOT_ENTRIES;
+    entries.truncate(MAX_SNAPSHOT_ENTRIES);
     Ok((entries, truncated))
 }
 
@@ -1126,6 +1426,48 @@ fn valid_snapshot_id(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn valid_snapshot_relative_path(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_SNAPSHOT_PATH
+        && !value.chars().any(char::is_control)
+        && Path::new(value)
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
+}
+
+fn escape_restic_pattern(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        if matches!(character, '\\' | '*' | '?' | '[') {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped
+}
+
+fn restore_arguments(
+    snapshot_id: &str,
+    project_path: &str,
+    selected_path: Option<&str>,
+    target: &Path,
+) -> Vec<String> {
+    let mut arguments = vec!["restore".into(), format!("{snapshot_id}:{project_path}")];
+    if let Some(path) = selected_path {
+        arguments.extend([
+            "--include".into(),
+            format!("/{}", escape_restic_pattern(path)),
+        ]);
+    }
+    arguments.extend([
+        "--target".into(),
+        target.to_string_lossy().into_owned(),
+        "--verify".into(),
+        "--json".into(),
+    ]);
+    arguments
 }
 
 fn ensure_private_directory(path: &Path) -> Result<(), &'static str> {
@@ -1282,6 +1624,124 @@ mod tests {
         );
     }
 
+    #[test]
+    fn snapshot_contents_are_bounded_typed_and_project_relative() {
+        let project = Project {
+            id: "b".repeat(32),
+            name: "Fixture".into(),
+            path: "/home/example/project".into(),
+            interval_minutes: 120,
+            quiet_minutes: 10,
+            mode: "ask".into(),
+            excludes: Vec::new(),
+        };
+        let snapshot = "c".repeat(64);
+        let records = [
+            serde_json::json!({
+                "struct_type": "snapshot", "id": snapshot,
+                "paths": [project.path], "tags": ["hetzner-drive", format!("project:{}", project.id)]
+            }),
+            serde_json::json!({
+                "struct_type": "node", "path": "/home/example/project",
+                "type": "dir", "size": 0
+            }),
+            serde_json::json!({
+                "struct_type": "node", "path": "/home/example/project/src",
+                "type": "dir", "size": 0
+            }),
+            serde_json::json!({
+                "struct_type": "node", "path": "/home/example/project/src/main.rs",
+                "type": "file", "size": 42
+            }),
+            serde_json::json!({
+                "struct_type": "node", "path": "/home/example/project/link",
+                "type": "symlink", "size": 0
+            }),
+        ];
+        let output = records
+            .iter()
+            .map(serde_json::Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let (entries, truncated) =
+            parse_snapshot_entries(output.as_bytes(), &project, &snapshot).unwrap();
+        assert!(!truncated);
+        assert_eq!(
+            entries,
+            vec![
+                SnapshotTreeEntry {
+                    path: "src".into(),
+                    kind: "dir".into(),
+                    size: 0,
+                },
+                SnapshotTreeEntry {
+                    path: "src/main.rs".into(),
+                    kind: "file".into(),
+                    size: 42,
+                },
+            ]
+        );
+        for unsafe_record in [
+            serde_json::json!({
+                "struct_type": "node", "path": "/home/example/elsewhere/file",
+                "type": "file", "size": 1
+            }),
+            serde_json::json!({
+                "struct_type": "node", "path": "/home/example/project/../escape",
+                "type": "file", "size": 1
+            }),
+        ] {
+            let changed = format!("{}\n{}", records[0], unsafe_record);
+            assert_eq!(
+                parse_snapshot_entries(changed.as_bytes(), &project, &snapshot),
+                Err("backup_contents_invalid")
+            );
+        }
+        assert!(!valid_snapshot_relative_path("../escape"));
+        assert!(!valid_snapshot_relative_path("/absolute"));
+        assert!(!valid_snapshot_relative_path("line\nbreak"));
+        let mut large = vec![records[0].to_string()];
+        for index in 0..=MAX_SNAPSHOT_ENTRIES {
+            large.push(
+                serde_json::json!({
+                    "struct_type": "node",
+                    "path": format!("/home/example/project/file-{index:04}"),
+                    "type": "file",
+                    "size": index,
+                })
+                .to_string(),
+            );
+        }
+        let (entries, truncated) =
+            parse_snapshot_entries(large.join("\n").as_bytes(), &project, &snapshot).unwrap();
+        assert!(truncated);
+        assert_eq!(entries.len(), MAX_SNAPSHOT_ENTRIES);
+        let arguments = restore_arguments(
+            &snapshot,
+            &project.path,
+            Some("draft/[copy]*?.txt"),
+            Path::new("/tmp/restore"),
+        );
+        assert_eq!(
+            arguments,
+            vec![
+                "restore".to_owned(),
+                format!("{snapshot}:{}", project.path),
+                "--include".to_owned(),
+                "/draft/\\[copy]\\*\\?.txt".to_owned(),
+                "--target".to_owned(),
+                "/tmp/restore".to_owned(),
+                "--verify".to_owned(),
+                "--json".to_owned(),
+            ]
+        );
+        assert!(!arguments.iter().any(|argument| argument == "--delete"));
+        assert_eq!(
+            escape_restic_pattern("literal[*]?\\name"),
+            r"literal\[\*]\?\\name"
+        );
+    }
+
     #[tokio::test]
     async fn demo_restore_requires_a_snapshot_authorized_by_history() {
         let manager = BackupManager::new(true);
@@ -1302,6 +1762,50 @@ mod tests {
         manager.demo_snapshots(&project_id).await.unwrap();
         assert_eq!(
             manager.start_demo(&project_id, Some(&snapshot_id)).await,
+            (true, "accepted".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn demo_selective_restore_requires_a_listed_entry() {
+        let manager = BackupManager::new(true);
+        let project_id = "b".repeat(32);
+        let snapshot_id = "a".repeat(64);
+        manager.demo_configuration_unlocked(true).await;
+        manager.demo_snapshots(&project_id).await.unwrap();
+        assert_eq!(
+            manager
+                .start_demo_selective_restore(&project_id, &snapshot_id, "src/main.rs")
+                .await,
+            (false, "backup_entry_unavailable".into())
+        );
+        manager
+            .demo_snapshot_entries(&project_id, &snapshot_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            manager
+                .start_demo_selective_restore(&project_id, &snapshot_id, "not-listed.txt")
+                .await,
+            (false, "backup_entry_unavailable".into())
+        );
+        manager.lock().await;
+        assert_eq!(
+            manager
+                .start_demo_selective_restore(&project_id, &snapshot_id, "src/main.rs")
+                .await,
+            (false, "backup_entry_unavailable".into())
+        );
+        manager.demo_configuration_unlocked(true).await;
+        manager.demo_snapshots(&project_id).await.unwrap();
+        manager
+            .demo_snapshot_entries(&project_id, &snapshot_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            manager
+                .start_demo_selective_restore(&project_id, &snapshot_id, "src/main.rs")
+                .await,
             (true, "accepted".into())
         );
     }
@@ -1369,6 +1873,18 @@ for index in range(len(value)):
         let source = directory.path().join("source");
         fs::DirBuilder::new().mode(0o700).create(&source).unwrap();
         private_file(&source.join("document.txt"), "synthetic restic content\n");
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(source.join("draft"))
+            .unwrap();
+        private_file(
+            &source.join("draft/[copy]*?.txt"),
+            "selected wildcard name\n",
+        );
+        private_file(
+            &source.join("draft/copy-secret.txt"),
+            "unselected sibling\n",
+        );
         let remote = directory.path().join("remote");
         fs::DirBuilder::new().mode(0o700).create(&remote).unwrap();
         let restore = directory.path().join("restore");
@@ -1455,8 +1971,98 @@ for index in range(len(value)):
         assert!(!truncated);
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].id, snapshot);
-        assert_eq!(history[0].files, 1);
-        assert_eq!(history[0].bytes, b"synthetic restic content\n".len() as u64);
+        assert_eq!(history[0].files, 3);
+        assert_eq!(
+            history[0].bytes,
+            (b"synthetic restic content\n".len()
+                + b"selected wildcard name\n".len()
+                + b"unselected sibling\n".len()) as u64
+        );
+        let contents_bytes = manager
+            .run_restic_capture(
+                vec![
+                    "ls".into(),
+                    "--json".into(),
+                    "--recursive".into(),
+                    "--sort".into(),
+                    "name".into(),
+                    snapshot.clone(),
+                    source.to_string_lossy().into_owned(),
+                ],
+                &config,
+                &config_password,
+                &repository_password,
+            )
+            .await
+            .unwrap();
+        let (contents, contents_truncated) =
+            parse_snapshot_entries(&contents_bytes, &history_project, &snapshot).unwrap();
+        assert!(!contents_truncated);
+        assert!(contents.iter().any(|entry| {
+            entry.path == "draft/[copy]*?.txt"
+                && entry.kind == "file"
+                && entry.size == b"selected wildcard name\n".len() as u64
+        }));
+        assert!(
+            contents
+                .iter()
+                .any(|entry| entry.path == "draft" && entry.kind == "dir")
+        );
+        let selective_restore = directory.path().join("selective-restore");
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&selective_restore)
+            .unwrap();
+        let selectively_restored = manager
+            .run_restic(
+                restore_arguments(
+                    &snapshot,
+                    &source.to_string_lossy(),
+                    Some("draft/[copy]*?.txt"),
+                    &selective_restore,
+                ),
+                &config,
+                &config_password,
+                &repository_password,
+                true,
+            )
+            .await
+            .unwrap();
+        assert!(selectively_restored.summary_seen);
+        assert_eq!(
+            fs::read(selective_restore.join("draft/[copy]*?.txt")).unwrap(),
+            b"selected wildcard name\n"
+        );
+        assert!(!selective_restore.join("draft/copy-secret.txt").exists());
+        let directory_restore = directory.path().join("directory-restore");
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&directory_restore)
+            .unwrap();
+        let directory_restored = manager
+            .run_restic(
+                restore_arguments(
+                    &snapshot,
+                    &source.to_string_lossy(),
+                    Some("draft"),
+                    &directory_restore,
+                ),
+                &config,
+                &config_password,
+                &repository_password,
+                true,
+            )
+            .await
+            .unwrap();
+        assert!(directory_restored.summary_seen);
+        assert_eq!(
+            fs::read(directory_restore.join("draft/[copy]*?.txt")).unwrap(),
+            b"selected wildcard name\n"
+        );
+        assert_eq!(
+            fs::read(directory_restore.join("draft/copy-secret.txt")).unwrap(),
+            b"unselected sibling\n"
+        );
         let restored = manager
             .run_restic(
                 vec![

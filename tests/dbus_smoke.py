@@ -14,7 +14,14 @@ os.environ["XDG_STATE_HOME"] = str(Path(test_xdg.name) / "state")
 from PySide6.QtDBus import QDBusConnection, QDBusMessage
 from PySide6.QtWidgets import QApplication
 from hetzner_drive.app import DriveWindow, SingleInstance
-from hetzner_drive.client import BUS, OBJECT, DriveClient, decode_snapshot_history, decode_status
+from hetzner_drive.client import (
+    BUS,
+    OBJECT,
+    DriveClient,
+    decode_snapshot_entries,
+    decode_snapshot_history,
+    decode_status,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 app = QApplication([])
@@ -107,7 +114,8 @@ try:
         "LockConfiguration", "CheckConnection", "RunHealthCheck", "OpenDrive", "GetOperationStatus",
         "MountDrive", "UnmountDrive", "GetMountActivity"
         , "GetBackupStatus", "InitializeBackupRepository", "UnlockBackupRepository",
-        "LockBackupRepository", "StartProjectBackup", "GetProjectSnapshots", "StartBackupRestore"
+        "LockBackupRepository", "StartProjectBackup", "GetProjectSnapshots", "StartBackupRestore",
+        "GetSnapshotEntries", "StartSelectiveRestore",
     }
 
     client = DriveClient()
@@ -146,6 +154,25 @@ try:
     wait_for(lambda: async_history and not client.pending, "Async history response timed out")
     assert async_history[0][0] == project_id and async_history[0][1:3] == (True, False)
     assert async_history[0][3][0]["id"] == history_entries[0]["id"]
+    contents = call(
+        "GetSnapshotEntries", arguments=[project_id, history_entries[0]["id"]]
+    ).arguments()
+    contents_success, contents_truncated, content_entries, contents_reason = (
+        decode_snapshot_entries(contents)
+    )
+    assert contents_success and not contents_truncated and contents_reason == "ok"
+    assert [entry["path"] for entry in content_entries] == ["README.md", "src", "src/main.rs"]
+    async_contents = []
+    client.snapshot_entries_received.connect(lambda *values: async_contents.append(values))
+    client.get_snapshot_entries(project_id, history_entries[0]["id"])
+    wait_for(lambda: async_contents and not client.pending, "Async snapshot contents timed out")
+    assert async_contents[0][:4] == (project_id, history_entries[0]["id"], True, False)
+    assert call(
+        "StartSelectiveRestore",
+        arguments=[project_id, history_entries[0]["id"], "src/main.rs"],
+    ).arguments() == [True, "accepted"]
+    wait_for(lambda: call("GetBackupStatus").arguments()[4] == "restore_complete",
+             "Demo selective restore did not complete")
     assert call(
         "StartBackupRestore", arguments=[project_id, history_entries[0]["id"]]
     ).arguments() == [True, "accepted"]
@@ -221,7 +248,10 @@ try:
     if window.tray:
         window.tray.hide()
     window.close()
-    print("PASS: single GUI, typed D-Bus API, duplicate rejection, allowlist, unlock/lock, 64-bit storage, async GUI, service loss/recovery")
+    print(
+        "PASS: single GUI, typed D-Bus API, duplicate rejection, allowlist, unlock/lock, "
+        "snapshot contents/selective restore, 64-bit storage, async GUI, service loss/recovery"
+    )
 finally:
     if core.poll() is None:
         core.terminate()

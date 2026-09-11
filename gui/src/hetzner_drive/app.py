@@ -109,6 +109,9 @@ ERROR_MESSAGES = {
     "backup_summary_invalid": "restic nu a confirmat identificatorul snapshotului creat.",
     "backup_history_failed": "Istoricul snapshoturilor nu a putut fi citit din repository.",
     "backup_history_invalid": "Repository-ul a returnat un istoric de snapshoturi nevalid.",
+    "backup_contents_failed": "Continutul snapshotului nu a putut fi citit din repository.",
+    "backup_contents_invalid": "Repository-ul a returnat un arbore de fisiere nevalid.",
+    "backup_entry_unavailable": "Fisierul sau directorul selectat nu mai este autorizat. Reincarca continutul snapshotului.",
     "project_registry_unavailable": "Registrul local al proiectelor nu este disponibil serviciului.",
     "project_registry_unsafe": "Registrul local al proiectelor are permisiuni nesigure.",
     "project_registry_invalid": "Registrul local al proiectelor nu respecta schema acceptata.",
@@ -181,6 +184,7 @@ BACKUP_PHASE_LABELS = {
     "initializing": "Se initializeaza repository-ul disposable",
     "unlocking": "Se verifica parola restic",
     "history": "Se incarca istoricul snapshoturilor",
+    "contents": "Se incarca continutul snapshotului",
     "backup": "Snapshot restic in curs",
     "checking": "Se verifica repository-ul",
     "backup_complete": "Snapshot creat si verificat structural",
@@ -409,6 +413,9 @@ class DriveWindow(QMainWindow):
         self.snapshot_history_loading = False
         self.snapshot_history_refresh_pending = False
         self.history_refresh_snapshot = ""
+        self.snapshot_entries_key = ("", "")
+        self.snapshot_entries_loading = False
+        self.snapshot_entries_refresh_pending = False
         self.thread_pool = QThreadPool.globalInstance()
         self.setWindowIcon(self.icon("drive-harddisk", QStyle.StandardPixmap.SP_DriveHDIcon))
 
@@ -701,9 +708,41 @@ class DriveWindow(QMainWindow):
         self.snapshot_tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.snapshot_tree.header().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.snapshot_tree.header().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        self.snapshot_tree.itemSelectionChanged.connect(self.update_backup_actions)
+        self.snapshot_tree.itemSelectionChanged.connect(self.snapshot_selection_changed)
         self.snapshot_tree.hide()
         backup_layout.addWidget(self.snapshot_tree, 1)
+
+        contents_header = QHBoxLayout()
+        contents_heading = QLabel("Continut snapshot")
+        contents_heading.setObjectName("sectionTitle")
+        contents_header.addWidget(contents_heading)
+        contents_header.addStretch()
+        self.refresh_contents_button = QPushButton(
+            self.icon("view-refresh", QStyle.StandardPixmap.SP_BrowserReload), "Reincarca continutul"
+        )
+        self.refresh_contents_button.setProperty("buttonRole", "quiet")
+        self.refresh_contents_button.clicked.connect(lambda: self.request_snapshot_entries(force=True))
+        contents_header.addWidget(self.refresh_contents_button)
+        backup_layout.addLayout(contents_header)
+        self.snapshot_contents_hint = QLabel(
+            "Selecteaza un snapshot pentru a incarca fisierele si directoarele restaurabile."
+        )
+        self.snapshot_contents_hint.setObjectName("sectionHint")
+        self.snapshot_contents_hint.setWordWrap(True)
+        backup_layout.addWidget(self.snapshot_contents_hint)
+        self.snapshot_contents_tree = QTreeWidget()
+        self.snapshot_contents_tree.setColumnCount(3)
+        self.snapshot_contents_tree.setHeaderLabels(("Nume", "Tip", "Dimensiune"))
+        self.snapshot_contents_tree.setRootIsDecorated(True)
+        self.snapshot_contents_tree.setSelectionMode(QTreeWidget.SelectionMode.SingleSelection)
+        self.snapshot_contents_tree.setTextElideMode(Qt.TextElideMode.ElideMiddle)
+        self.snapshot_contents_tree.setMinimumHeight(160)
+        self.snapshot_contents_tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.snapshot_contents_tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.snapshot_contents_tree.header().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.snapshot_contents_tree.itemSelectionChanged.connect(self.update_backup_actions)
+        self.snapshot_contents_tree.hide()
+        backup_layout.addWidget(self.snapshot_contents_tree, 1)
 
         self.backup_actions_layout = QGridLayout()
         self.backup_actions_layout.setHorizontalSpacing(8)
@@ -728,9 +767,13 @@ class DriveWindow(QMainWindow):
         self.backup_now_button.setProperty("buttonRole", "primary")
         self.backup_now_button.clicked.connect(self.start_selected_backup)
         self.restore_backup_button = QPushButton(
-            self.icon("document-revert", QStyle.StandardPixmap.SP_DialogResetButton), "Restaureaza snapshot"
+            self.icon("document-revert", QStyle.StandardPixmap.SP_DialogResetButton), "Restaureaza tot"
         )
         self.restore_backup_button.clicked.connect(self.restore_selected_backup)
+        self.restore_selection_button = QPushButton(
+            self.icon("edit-select", QStyle.StandardPixmap.SP_FileIcon), "Restaureaza selectia"
+        )
+        self.restore_selection_button.clicked.connect(self.restore_selected_entry)
         self.initialize_backup_button = QPushButton(
             self.icon("document-new", QStyle.StandardPixmap.SP_FileDialogNewFolder), "Initializeaza restic"
         )
@@ -752,6 +795,7 @@ class DriveWindow(QMainWindow):
             self.lock_backup_button,
             self.backup_now_button,
             self.restore_backup_button,
+            self.restore_selection_button,
         )
         self.backup_actions_compact = None
         self.layout_backup_actions(self.width() < 700)
@@ -809,6 +853,7 @@ class DriveWindow(QMainWindow):
         self.client.mount_activity_received.connect(self.apply_mount_activity)
         self.client.backup_status_received.connect(self.apply_backup_status)
         self.client.snapshot_history_received.connect(self.apply_snapshot_history)
+        self.client.snapshot_entries_received.connect(self.apply_snapshot_entries)
         self.apply_theme()
         self.setup_tray()
         self.translate_static_ui()
@@ -939,11 +984,27 @@ class DriveWindow(QMainWindow):
         selected = self.snapshot_tree.selectedItems()
         return selected[0].data(0, Qt.ItemDataRole.UserRole) if selected else None
 
+    def selected_snapshot_entry_path(self):
+        selected = self.snapshot_contents_tree.selectedItems()
+        return selected[0].data(0, Qt.ItemDataRole.UserRole) if selected else None
+
+    def clear_snapshot_entries(self, message):
+        self.snapshot_contents_tree.clear()
+        self.snapshot_contents_tree.hide()
+        self.snapshot_contents_hint.setText(self._(message))
+        self.snapshot_contents_hint.show()
+
     def clear_snapshot_history(self, message):
         self.snapshot_tree.clear()
         self.snapshot_tree.hide()
         self.snapshot_history_hint.setText(self._(message))
         self.snapshot_history_hint.show()
+        self.snapshot_entries_key = ("", "")
+        self.snapshot_entries_loading = False
+        self.snapshot_entries_refresh_pending = False
+        self.clear_snapshot_entries(
+            "Selecteaza un snapshot pentru a incarca fisierele si directoarele restaurabile."
+        )
 
     def project_selection_changed(self):
         self.snapshot_history_project_id = ""
@@ -953,6 +1014,104 @@ class DriveWindow(QMainWindow):
         )
         self.update_backup_actions()
         self.request_snapshot_history()
+
+    def snapshot_selection_changed(self):
+        self.snapshot_entries_key = ("", "")
+        self.snapshot_entries_refresh_pending = False
+        self.clear_snapshot_entries(
+            "Se incarca fisierele si directoarele snapshotului selectat..."
+            if self.selected_snapshot_id()
+            else "Selecteaza un snapshot pentru a incarca fisierele si directoarele restaurabile."
+        )
+        self.update_backup_actions()
+        self.request_snapshot_entries()
+
+    def request_snapshot_entries(self, force=False):
+        project_id = self.selected_project_id()
+        snapshot_id = self.selected_snapshot_id()
+        engine = self.backup_engine_status or {}
+        config_unlocked = bool(self.latest_status and self.latest_status["config"] == "unlocked")
+        if not project_id or not snapshot_id or not engine.get("repository_unlocked") or not config_unlocked:
+            return
+        if self.snapshot_entries_loading:
+            self.snapshot_entries_refresh_pending |= force
+            return
+        if engine.get("busy") or self.client_busy:
+            self.snapshot_entries_refresh_pending |= force
+            return
+        key = (project_id, snapshot_id)
+        if not force and self.snapshot_entries_key == key:
+            return
+        self.snapshot_entries_loading = True
+        self.snapshot_contents_hint.setText(
+            self._("Se incarca fisierele si directoarele snapshotului selectat...")
+        )
+        self.snapshot_contents_hint.show()
+        self.client.get_snapshot_entries(project_id, snapshot_id)
+        self.update_backup_actions()
+
+    def apply_snapshot_entries(self, project_id, snapshot_id, success, truncated, entries, reason):
+        self.snapshot_entries_loading = False
+        selected_key = (self.selected_project_id(), self.selected_snapshot_id())
+        if (project_id, snapshot_id) != selected_key:
+            self.snapshot_entries_key = ("", "")
+            self.snapshot_entries_refresh_pending = False
+            self.request_snapshot_entries(force=True)
+            return
+        self.snapshot_entries_key = selected_key if success else ("", "")
+        self.snapshot_contents_tree.blockSignals(True)
+        self.snapshot_contents_tree.clear()
+        items = {}
+        if success:
+            for entry in entries:
+                parts = entry["path"].split("/")
+                parent_path = "/".join(parts[:-1])
+                kind_label = self._("Director" if entry["kind"] == "dir" else "Fisier")
+                item = QTreeWidgetItem([
+                    parts[-1] if parent_path in items else entry["path"],
+                    kind_label,
+                    "" if entry["kind"] == "dir" else size_text(entry["size"]),
+                ])
+                item.setData(0, Qt.ItemDataRole.UserRole, entry["path"])
+                item.setToolTip(0, entry["path"])
+                item.setIcon(
+                    0,
+                    self.icon(
+                        "folder" if entry["kind"] == "dir" else "text-x-generic",
+                        QStyle.StandardPixmap.SP_DirIcon
+                        if entry["kind"] == "dir"
+                        else QStyle.StandardPixmap.SP_FileIcon,
+                    ),
+                )
+                parent = items.get(parent_path)
+                if parent is None:
+                    self.snapshot_contents_tree.addTopLevelItem(item)
+                else:
+                    parent.addChild(item)
+                items[entry["path"]] = item
+        self.snapshot_contents_tree.blockSignals(False)
+        if not success:
+            self.clear_snapshot_entries(
+                ERROR_MESSAGES.get(reason, "Continutul snapshotului nu este disponibil.")
+            )
+        elif entries:
+            template = (
+                "Sunt afisate primele {count} intrari restaurabile; lista este trunchiata."
+                if truncated
+                else "{count} intrari restaurabile in snapshotul selectat."
+            )
+            self.snapshot_contents_hint.setText(self._(template).format(count=len(entries)))
+            self.snapshot_contents_hint.show()
+            self.snapshot_contents_tree.show()
+            self.snapshot_contents_tree.expandToDepth(0)
+        else:
+            self.clear_snapshot_entries("Snapshotul nu contine fisiere sau directoare restaurabile.")
+        refresh_pending = self.snapshot_entries_refresh_pending
+        self.snapshot_entries_refresh_pending = False
+        self.update_backup_actions()
+        self.client.refresh()
+        if refresh_pending:
+            QTimer.singleShot(0, lambda: self.request_snapshot_entries(force=True))
 
     def request_snapshot_history(self, force=False):
         project_id = self.selected_project_id()
@@ -1053,13 +1212,31 @@ class DriveWindow(QMainWindow):
         self.refresh_history_button.setEnabled(
             selected and engine_unlocked and config_unlocked and controls_available
         )
+        selected_snapshot = self.selected_snapshot_id()
+        self.refresh_contents_button.setEnabled(
+            selected
+            and selected_snapshot is not None
+            and engine_unlocked
+            and config_unlocked
+            and controls_available
+            and not self.snapshot_entries_loading
+        )
         safe_project = bool(selected_status and selected_status.state != "attention")
         self.backup_now_button.setEnabled(
             safe_project and engine_unlocked and config_unlocked and controls_available
         )
         self.restore_backup_button.setEnabled(
             selected
-            and self.selected_snapshot_id() is not None
+            and selected_snapshot is not None
+            and engine_unlocked
+            and config_unlocked
+            and controls_available
+        )
+        self.restore_selection_button.setEnabled(
+            selected
+            and selected_snapshot is not None
+            and self.selected_snapshot_entry_path() is not None
+            and self.snapshot_entries_key == (self.selected_project_id(), selected_snapshot)
             and engine_unlocked
             and config_unlocked
             and controls_available
@@ -1161,6 +1338,25 @@ class DriveWindow(QMainWindow):
         if project_id and snapshot_id:
             self.client.start_backup_restore(project_id, snapshot_id)
 
+    def restore_selected_entry(self):
+        project_id = self.selected_project_id()
+        snapshot_id = self.selected_snapshot_id()
+        selected_path = self.selected_snapshot_entry_path()
+        if not project_id or not snapshot_id or not selected_path:
+            return
+        answer = QMessageBox.warning(
+            self,
+            self._("Restaurare selectiva"),
+            self._(
+                "Restaurezi numai «{path}» din snapshot intr-un director local NOU. "
+                "Originalul nu va fi suprascris, dar trebuie sa inspectezi rezultatul inainte de copiere.\n\nContinui?"
+            ).format(path=selected_path),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self.client.start_selective_restore(project_id, snapshot_id, selected_path)
+
     def apply_backup_status(
         self,
         available,
@@ -1224,7 +1420,9 @@ class DriveWindow(QMainWindow):
             self.set_backup_notice(ERROR_MESSAGES.get(last_error, "Operatia restic a esuat."), "error")
         elif busy:
             self.set_backup_notice(
-                self._("{phase}. Numele fisierelor nu sunt afisate sau jurnalizate.").format(
+                self._(
+                    "{phase}. Progresul nu include nume de fisiere; continutul snapshotului este afisat numai la cerere si nu este jurnalizat."
+                ).format(
                     phase=label
                 ),
                 "info",
@@ -1459,6 +1657,7 @@ class DriveWindow(QMainWindow):
         self.update_backup_actions()
         if not busy:
             self.request_snapshot_history(force=self.snapshot_history_refresh_pending)
+            self.request_snapshot_entries(force=self.snapshot_entries_refresh_pending)
 
     def update_actions(self):
         status = self.latest_status

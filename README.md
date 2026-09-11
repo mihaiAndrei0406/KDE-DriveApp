@@ -9,8 +9,9 @@ observation are implemented; the idle live KDE/FUSE lifecycle passed on
 A local project backup assistant detects metadata changes and recommends backups.
 Its phase-5b restic engine creates user-confirmed encrypted snapshots in a fixed
 append-only disposable repository and supports verified restore into a new local
-directory. The GUI reads a bounded per-project snapshot history and restores the
-explicitly selected version, including after a service restart and fresh unlock.
+directory. The GUI reads a bounded per-project snapshot history, shows a bounded
+file tree, and restores either the complete selected version or one authorized
+file/subdirectory, including after a service restart and fresh unlock.
 Retention, pruning and unattended upload remain disabled.
 Progress is recorded in `docs/WORK_LOG.md`.
 
@@ -127,11 +128,14 @@ delete or arbitrary restic operation. Each backup and restore needs a separate
 explicit pinentry confirmation. One job may run at a time. A successful snapshot is followed
 by `restic check --with-cache`; the GUI marks the scanned digest verified only if
 the local project did not change during the job. The history view exposes at most
-256 entries matching the exact project path and application/project tags. Restore
-accepts only a full ID selected from that validated list, uses restic verification
+256 entries matching the exact project path and application/project tags.
+Selecting one loads at most 2,048 regular-file/directory entries from a bounded
+`restic ls --json` response. Whole and selective restore accept only IDs/relative
+paths from the current server-validated session catalogs, use restic verification
 and an application-created 0700 directory below `$HOME/HetznerDrive-Restores`,
-never the original project path. Phase 5c retention and optional idle automation
-remain outside the enabled scope.
+never the original project path. Snapshot filenames are displayed only after this
+explicit request and are not placed in progress or event logs. Phase 5c retention
+and optional idle automation remain outside the enabled scope.
 
 ## Desktop integration
 

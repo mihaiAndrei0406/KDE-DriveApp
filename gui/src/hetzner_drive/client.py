@@ -13,11 +13,12 @@ OPERATIONS = frozenset({
 })
 BACKUP_OPERATIONS = frozenset({
     "InitializeBackupRepository", "UnlockBackupRepository", "LockBackupRepository",
-    "StartProjectBackup", "StartBackupRestore",
+    "StartProjectBackup", "StartBackupRestore", "StartSelectiveRestore",
 })
 METHODS = OPERATIONS | BACKUP_OPERATIONS | {
     "GetStatus", "GetOperationStatus", "GetMountActivity", "GetStorageUsage",
     "CheckSshAgent", "GetRecentLogs", "GetBackupStatus", "GetProjectSnapshots",
+    "GetSnapshotEntries",
 }
 
 
@@ -90,6 +91,52 @@ def decode_snapshot_history(arguments):
     return success, truncated, entries, reason
 
 
+def decode_snapshot_entries(arguments):
+    if (
+        len(arguments) != 6
+        or type(arguments[0]) is not bool
+        or type(arguments[1]) is not bool
+        or not isinstance(arguments[5], str)
+    ):
+        raise ValueError("Invalid snapshot entries response")
+    success, truncated, *encoded_arrays, reason = arguments
+    arrays = []
+    for encoded in encoded_arrays:
+        if isinstance(encoded, list):
+            arrays.append(encoded)
+            continue
+        if not isinstance(encoded, QDBusArgument):
+            raise ValueError("Invalid snapshot entries array")
+        values = []
+        encoded.beginArray()
+        while not encoded.atEnd():
+            values.append(encoded.asVariant())
+        arrays.append(values)
+    paths, kinds, sizes = arrays
+    count = len(paths)
+    if count > 2048 or any(len(values) != count for values in (kinds, sizes)):
+        raise ValueError("Invalid snapshot entries shape")
+    entries = []
+    for path, kind, size in zip(paths, kinds, sizes, strict=True):
+        components = path.split("/") if isinstance(path, str) else []
+        if (
+            not isinstance(path, str)
+            or not 1 <= len(path) <= 4096
+            or path.startswith("/")
+            or any(not component or component in {".", ".."} for component in components)
+            or any(ord(character) < 32 or ord(character) == 127 for character in path)
+            or not isinstance(kind, str)
+            or kind not in {"file", "dir"}
+            or type(size) is not int
+            or size < 0
+        ):
+            raise ValueError("Invalid snapshot entry")
+        entries.append({"path": path, "kind": kind, "size": size})
+    if not success and (truncated or entries):
+        raise ValueError("Invalid failed snapshot entries response")
+    return success, truncated, entries, reason
+
+
 class DriveClient(QObject):
     status_received = Signal(dict)
     logs_received = Signal(list)
@@ -104,6 +151,7 @@ class DriveClient(QObject):
         bool, bool, bool, bool, str, str, object, object, object, object, str, str, str
     )
     snapshot_history_received = Signal(str, bool, bool, object, str)
+    snapshot_entries_received = Signal(str, str, bool, bool, object, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -162,8 +210,14 @@ class DriveClient(QObject):
     def get_project_snapshots(self, project_id):
         self._request("GetProjectSnapshots", project_id)
 
+    def get_snapshot_entries(self, project_id, snapshot_id):
+        self._request("GetSnapshotEntries", project_id, snapshot_id)
+
     def start_backup_restore(self, project_id, snapshot_id):
         self._request("StartBackupRestore", project_id, snapshot_id)
+
+    def start_selective_restore(self, project_id, snapshot_id, selected_path):
+        self._request("StartSelectiveRestore", project_id, snapshot_id, selected_path)
 
     def _request(self, method, *arguments):
         if method not in METHODS:
@@ -181,7 +235,9 @@ class DriveClient(QObject):
             220000
             if method in {"UnlockConfiguration", "InitializeBackupRepository", "UnlockBackupRepository"}
             else 200000
-            if method in {"StartProjectBackup", "StartBackupRestore"}
+            if method in {"StartProjectBackup", "StartBackupRestore", "StartSelectiveRestore"}
+            else 45000
+            if method == "GetSnapshotEntries"
             else 45000
             if method in OPERATIONS | BACKUP_OPERATIONS | {"GetStorageUsage"}
             else 12000
@@ -189,8 +245,10 @@ class DriveClient(QObject):
         watcher = QDBusPendingCallWatcher(self.bus.asyncCall(message, timeout), self)
         self.pending[method] = watcher
         watcher.setProperty("operation", method)
-        if method == "GetProjectSnapshots":
+        if method in {"GetProjectSnapshots", "GetSnapshotEntries"}:
             watcher.setProperty("project_id", arguments[0])
+        if method == "GetSnapshotEntries":
+            watcher.setProperty("snapshot_id", arguments[1])
         watcher.finished.connect(self._finished)
         self.busy_changed.emit(True)
 
@@ -246,6 +304,16 @@ class DriveClient(QObject):
                 self.snapshot_history_received.emit(
                     watcher.property("project_id"), success, truncated, entries, reason
                 )
+            elif method == "GetSnapshotEntries":
+                success, truncated, entries, reason = decode_snapshot_entries(values)
+                self.snapshot_entries_received.emit(
+                    watcher.property("project_id"),
+                    watcher.property("snapshot_id"),
+                    success,
+                    truncated,
+                    entries,
+                    reason,
+                )
             elif method in OPERATIONS | BACKUP_OPERATIONS:
                 if len(values) != 2 or type(values[0]) is not bool or not isinstance(values[1], str):
                     raise ValueError("Invalid operation response")
@@ -254,5 +322,14 @@ class DriveClient(QObject):
             if method == "GetProjectSnapshots":
                 self.snapshot_history_received.emit(
                     watcher.property("project_id"), False, False, [], "backup_history_invalid"
+                )
+            elif method == "GetSnapshotEntries":
+                self.snapshot_entries_received.emit(
+                    watcher.property("project_id"),
+                    watcher.property("snapshot_id"),
+                    False,
+                    False,
+                    [],
+                    "backup_contents_invalid",
                 )
             self.failed.emit("Raspuns incompatibil primit de la serviciu.")

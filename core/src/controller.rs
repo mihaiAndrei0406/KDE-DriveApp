@@ -1,7 +1,7 @@
 use crate::{
     Paths, ProcessRunner, Snapshot, State,
     auth::{self, AuthOperation, EncryptedConfig, StorageUsage},
-    backup::{BackupManager, BackupStatus, SnapshotEntry},
+    backup::{BackupManager, BackupStatus, SnapshotEntry, SnapshotTreeEntry},
     mount::{self, OwnedMount},
     recent_logs,
     secrets::{self, SessionSecret},
@@ -816,6 +816,33 @@ impl Controller {
             .map_err(str::to_owned)
     }
 
+    pub async fn snapshot_entries(
+        &self,
+        project_id: &str,
+        snapshot_id: &str,
+    ) -> Result<(Vec<SnapshotTreeEntry>, bool), String> {
+        if self.demo {
+            return self
+                .backup
+                .demo_snapshot_entries(project_id, snapshot_id)
+                .await
+                .map_err(str::to_owned);
+        }
+        let credentials = match self.backup_credentials().await {
+            Ok(credentials) => credentials,
+            Err(code) => return Err(code.into()),
+        };
+        self.backup
+            .list_snapshot_entries(
+                project_id,
+                snapshot_id,
+                &credentials.config,
+                &credentials.password,
+            )
+            .await
+            .map_err(str::to_owned)
+    }
+
     pub async fn start_backup_restore(
         &self,
         project_id: &str,
@@ -832,6 +859,33 @@ impl Controller {
             .start_restore(
                 project_id,
                 snapshot_id,
+                credentials.config,
+                credentials.password,
+            )
+            .await
+    }
+
+    pub async fn start_selective_restore(
+        &self,
+        project_id: &str,
+        snapshot_id: &str,
+        selected_path: &str,
+    ) -> (bool, String) {
+        if self.demo {
+            return self
+                .backup
+                .start_demo_selective_restore(project_id, snapshot_id, selected_path)
+                .await;
+        }
+        let credentials = match self.backup_credentials().await {
+            Ok(credentials) => credentials,
+            Err(code) => return (false, code.into()),
+        };
+        self.backup
+            .start_selective_restore(
+                project_id,
+                snapshot_id,
+                selected_path,
                 credentials.config,
                 credentials.password,
             )

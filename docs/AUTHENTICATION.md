@@ -87,6 +87,10 @@ operation timeout.
 The restic repository password is separate. It uses the same protected-memory and
 peer-checked one-shot principles, is removed by restic lock/configuration lock/
 service exit, and never travels through D-Bus, argv, or a persistent environment.
+Backup, complete restore, and selective restore each require an explicit bilingual
+pinentry confirmation. The selective confirmation identifies the operation class;
+the filename itself is shown in the GUI and is never inserted into the Assuan
+pinentry command stream.
 
 ## Verification
 

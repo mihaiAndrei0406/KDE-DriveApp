@@ -108,11 +108,19 @@ snapshot consumes remote space and this phase intentionally provides no deletion
    `Istoric snapshoturi` must load the retained snapshot from the repository with
    aligned date/file/size fields. Locking restic must clear the table; unlock and
    selection must load it again. No history read may create a remote write.
-6. Select the retained snapshot, choose `Restore snapshot` and confirm in pinentry.
+6. Select the retained snapshot, choose `Restore all` and confirm in pinentry.
    The result must be a new 0700 directory below
    `$HOME/HetznerDrive-Restores`; the original must remain untouched. Compare
    restored size and SHA-256 with the source.
-7. Remove the temporary project from the local registry after inspection. Local
+7. Reload the same snapshot's `Snapshot contents`. Confirm the tree shows only
+   regular files/directories, contains no absolute path, and reports truncation if
+   applicable. Select one known file, choose `Restore selection`, verify the GUI
+   path, and confirm the selective pinentry prompt. Require a second new 0700
+   target containing the exact verified file and no sibling file. Repeat with a
+   small subdirectory and inspect every descendant, including any archived
+   symlink. Lock restic and confirm the content tree and authorization are cleared;
+   an old direct D-Bus tuple must be rejected until reloaded.
+8. Remove the temporary project from the local registry after inspection. Local
    fixture/restore cleanup is separate. Do not attempt to remove the remote test
    snapshot through another tool while evaluating the append-only policy.
 

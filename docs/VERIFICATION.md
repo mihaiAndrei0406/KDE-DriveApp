@@ -9,14 +9,15 @@ in `WORK_LOG.md`.
 
 ## Automated checks
 
-- `cargo test --locked --offline --all-targets`: 39 Rust unit tests passed. Coverage includes
+- `cargo test --locked --offline --all-targets`: 41 Rust unit tests passed. Coverage includes
   command restrictions, mount observations, operation serialization, persistent
   remote failures/recovery, local-only health results, operation history, private
   directory validation, remote mount collision detection, owned demo lifecycle,
   shutdown cleanup, fixed foreground mount arguments, strict backup registry
   parsing, exact project/tag/path snapshot-history filtering, restore authorization
-  from the per-project session catalog and the fixed disposable append-only
-  repository policy.
+  from per-project session catalogs, the fixed disposable append-only repository
+  policy, bounded typed snapshot-content parsing, traversal/stale-catalog
+  rejection, and exact escaped selective-restore arguments.
 - The same command runs the standalone `auth_flow` test: real rclone decrypts a
   temporary encrypted fixture through the one-shot password helper. Correct and
   incorrect synthetic passwords, unchanged configuration and socket cleanup pass.
@@ -34,30 +35,37 @@ in `WORK_LOG.md`.
   was refused before credentials were sent. No TCP listener or remote exists.
 - A real local restic/rclone integration test uses both peer-checked password
   helpers, an encrypted rclone config, append-only transport, snapshot creation,
-  repository checking, JSON history filtering and `--verify` restore with exact
-  content comparison. Its
+  repository checking, JSON history/content filtering, complete restore, exact
+  `--verify` restore of a file whose name contains restic pattern characters,
+  sibling exclusion, and verified restoration of a complete selected directory.
+  Its
   repository and credentials are synthetic and temporary; it never contacts
   Hetzner.
 - `cargo clippy --locked --all-targets -- -D warnings`: passed.
 - `cargo fmt --all -- --check`: passed.
 - Debug and release builds using `--locked --offline`: passed.
-- `.venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v`: 25 passed
-  (13 GUI/schema tests, 6 project-monitor tests and 6 installer tests using
+- The English-catalog AST audit checked 205 static and mapped UI strings: no
+  translation entry was missing.
+- `.venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v`: 26 passed
+  (14 GUI/schema tests, 6 project-monitor tests and 6 installer tests using
   temporary paths). Coverage includes explicit English static/runtime UI and the
-  public installer policy, including identity-free uninstall preview.
+  public installer policy, identity-free uninstall preview, defensive snapshot
+  entry decoding, hierarchical display, and selective request routing.
 - `dbus-run-session --config-file=tests/dbus-session.conf -- .venv/bin/python
   tests/dbus_smoke.py`: passed. The private bus has no activation
   directories and the test refuses to run when the installed service is visible.
   It checks the per-user GUI single-instance activation, fixed typed API,
   rejection of unsupported methods, duplicate service ownership,
-  unlock/lock, simulated backup, typed snapshot history, selected restore and
-  owned mount/unmount, activity status,
+  unlock/lock, simulated backup, typed snapshot history/content, complete and
+  selective restore, owned mount/unmount, activity status,
   safe shutdown, 64-bit space values, operation/error history, overlapping
   refreshes and GUI recovery after service loss. The core always uses `--demo`.
 - Purple Midnight and Lightning Purple offscreen views were inspected at 900x760
   and 540x480. The new Backupuri page was also inspected with synthetic verified,
   changed and due projects; actions reflow below 700 px and the page scrolls at
   minimum size without clipping controls. Captures are temporary artifacts.
+  The new selective tree is covered by offscreen hierarchy/action tests but has
+  not yet received a live KDE visual inspection with a real snapshot.
 - The release `--demo --inspect` command returns a synthetic locked snapshot.
 - Installer `plan` shows four destination paths plus complete rendered contents.
   The 2026-09-11 plan used only generic example policy values and changed no live
@@ -93,6 +101,10 @@ in `WORK_LOG.md`.
   branch returned before synchronizing its synthetic restic state. The demo-only
   branch now updates the backup manager before returning; the isolated smoke test
   and full regressions pass.
+- The first real selective-restore test used restic's `snapshot:subpath` form for
+  a file, which restic supports only for subfolders. The implementation now uses
+  the documented `--include` mechanism relative to the validated project root,
+  escapes Go-pattern metacharacters, and the exact-file `--verify` test passes.
 
 ## Live disposable backup acceptance
 
@@ -153,6 +165,13 @@ new release method was also called while locked and failed closed with empty typ
 arrays and `configuration_locked`. A live Hetzner history query awaits a registered
 current project; the real local restic integration and isolated D-Bus flow passed
 without creating another remote snapshot.
+
+Phase 5b.2 selective restore passed synthetic unit, real local restic/rclone file
+and directory restoration, Qt schema/tree/action, and isolated D-Bus checks. Live
+listing/restoration from the existing disposable Hetzner snapshot, a response
+that exceeds 4 MiB, and the 2,048-entry truncation presentation remain manual
+checks. No remote read or write was performed for phase 5b.2 during this
+implementation.
 
 The RC exception was explicitly approved and the private authenticated mechanism
 passed both direct and installed-service live mount checks. Pending-upload and

@@ -164,7 +164,7 @@ notificarea tray. `Amana o ora` amana doar notificarea; nu creeaza un snapshot.
 Backupul nu porneste automat in versiunea curenta si cere intotdeauna confirmare
 explicita in pinentry.
 
-## Restaurarea unui snapshot
+## Restaurarea completa sau selectiva
 
 1. Deblocheaza configuratia rclone si repository-ul restic, apoi selecteaza
    proiectul dorit. Aplicatia incarca istoricul direct din repository; montarea
@@ -173,17 +173,37 @@ explicita in pinentry.
    dimensiune si prefixul ID-ului. Lista este ordonata de la cel mai nou la cel
    mai vechi, primul element fiind selectat implicit. `Actualizeaza istoricul`
    reciteste repository-ul.
-3. Apasa `Restaureaza snapshot`, citeste avertismentul si confirma in pinentry.
+3. Pentru tot proiectul, apasa `Restaureaza tot` si confirma in pinentry.
 4. Aplicatia restaureaza numai snapshotul selectat, cu verificare, intr-un
    director nou:
    `$HOME/HetznerDrive-Restores/restore-...`.
 5. Inspecteaza si compara fisierele. Originalul nu este suprascris.
 
+Pentru un singur fisier sau subdirector:
+
+1. Selecteaza snapshotul si asteapta incarcarea sectiunii `Continut snapshot`.
+2. Alege un fisier obisnuit sau un director si apasa `Restaureaza selectia`.
+3. Verifica numele relativ din avertismentul GUI, apoi confirma separat in
+   dialogul pinentry bilingv.
+4. Rezultatul este scris cu `--verify` intr-un alt director privat nou; continutul
+   original si restaurarile anterioare nu sunt suprascrise.
+
+Backendul accepta calea relativa numai daca aceeasi combinatie proiect–snapshot–
+cale a fost returnata de lista validata in sesiunea curenta. Metacaracterele din
+nume sunt escapate pentru filtrul restic. Lista citeste cel mult 4 MiB si afiseaza
+cel mult 2.048 de fisiere/directoare restaurabile; marcajul de trunchiere inseamna
+ca exista mai multe intrari, iar un raspuns peste limita esueaza inchis. Symlinkurile
+si nodurile speciale nu pot fi selectate direct. Restaurarea unui director include
+insa intregul sau continut arhivat, inclusiv eventualele symlinkuri descendente;
+inspecteaza directorul nou inainte sa copiezi ceva in proiectul original.
+
 Sunt afisate cel mult 256 dintre cele mai recente snapshoturi care corespund
 simultan tagului aplicatiei, ID-ului proiectului si caii exacte inregistrate.
-Backendul accepta pentru restore numai un ID complet obtinut din acest istoric in
-sesiunea curenta. La `Blocheaza restic`, lista si autorizarea locala sunt sterse;
-dupa restart sau o noua deblocare selecteaza proiectul pentru a le reincarca.
+Backendul accepta pentru restore numai un ID complet obtinut din acest istoric si,
+pentru restore selectiv, numai o cale obtinuta din arborele acelui snapshot in
+sesiunea curenta. La `Blocheaza restic`, `Blocheaza` configuratia sau restart,
+listele si ambele autorizari locale sunt sterse; selecteaza din nou proiectul si
+snapshotul pentru a le reincarca.
 
 ## Sesiune, tray si pornire
 
@@ -213,8 +233,10 @@ dupa restart sau o noua deblocare selecteaza proiectul pentru a le reincarca.
 ## Evenimente si Diagnostic
 
 `Evenimente` afiseaza numai operatii si coduri sanitizate, nu parole sau nume brute
-de fisiere. `Diagnostic` afiseaza valorile tehnice tipizate utile la depanare.
-La raportarea unei probleme copiaza codul de eroare, nu parolele si nu continutul
+de fisiere. Numele relative stocate apar numai dupa cererea explicita din
+`Continut snapshot` si circula pe D-Bus-ul sesiunii aceluiasi utilizator;
+nu sunt adaugate in progres, `Evenimente` sau `Diagnostic`. La raportarea unei
+probleme copiaza codul de eroare, nu parolele, numele fisierelor ori continutul
 configuratiei.
 
 ## Probleme frecvente
@@ -236,6 +258,9 @@ configuratiei.
 - Istoric indisponibil: verifica daca ambele configuratii sunt deblocate, proiectul
   este selectat si niciun alt job restic nu ruleaza, apoi apasa
   `Actualizeaza istoricul`.
+- Continut snapshot indisponibil/trunchiat: reincarca snapshotul; un raspuns peste
+  4 MiB esueaza inchis, iar lista afiseaza cel mult 2.048 de intrari. Numai
+  intrarile vizibile pot autoriza restaurarea selectiva.
 - Snapshot refuzat la restore: istoricul s-a schimbat ori repository-ul a fost
   blocat intre timp; reincarca lista si selecteaza din nou snapshotul.
 - Serviciu indisponibil: redeschide aplicatia pentru activare D-Bus; daca problema
@@ -253,7 +278,6 @@ configuratiei.
 
 ## Functionalitati planificate, dar inactive
 
-- restaurarea unui fisier/subdirector ales;
 - automatizare opt-in dupa quiet period, cu reguli de baterie/retea;
 - anularea controlata a unui job si recuperarea dupa intrerupere;
 - verificari periodice esantionate ale datelor;

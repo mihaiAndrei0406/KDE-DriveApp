@@ -114,10 +114,28 @@ The history view loads at most 256 recent snapshots filtered simultaneously by
 the application tag, exact project ID, and registered path. Refresh is read-only.
 Restic lock clears both the table and the session authorization catalog.
 
-To restore, select a listed snapshot and choose **Restore snapshot**, then confirm
-in pinentry. The backend accepts only the full ID authorized for that project in
-the current session and runs verified restore into a new 0700 directory below
-`$HOME/HetznerDrive-Restores`. It never overwrites the original project.
+To restore the complete project version, select a listed snapshot, choose
+**Restore all**, and confirm in pinentry. The backend accepts only the full ID
+authorized for that project in the current session and runs verified restore into
+a new 0700 directory below `$HOME/HetznerDrive-Restores`.
+
+Selecting a snapshot also loads its **Snapshot contents** tree. Choose one regular
+file or directory, select **Restore selection**, review the GUI warning, and
+confirm the separate selective-restore pinentry prompt. The service accepts the
+relative path only if the exact project/snapshot/path tuple came from its current
+validated listing. It escapes restic pattern characters and restores into another
+new private directory; the original project is never overwritten.
+
+The listing captures at most 4 MiB and displays at most 2,048 restorable entries.
+If more valid entries fit in the response the table is visibly marked truncated;
+an oversized response fails closed. Symlinks and special nodes are not directly
+selectable. Restoring a directory still restores all of its archived descendants,
+including any symlinks below it, so inspect the new target before copying anything
+into the original project.
+Filenames are exposed on the same-user session bus and in this explicit GUI tree,
+but are not added to progress, diagnostics, or sanitized event logs. Locking
+restic/configuration or restarting the service clears both history and path
+authorization, so reload the snapshot and its contents.
 
 The rclone transport is append-only. The application exposes no arbitrary remote,
 command, delete, forget, prune, retention, or overwrite operation.
@@ -129,8 +147,10 @@ but does not promise to stop the backend or unmount. D-Bus can start the backend
 on demand; tray autostart and automount remain disabled by default.
 
 Events contain only allowlisted operations and sanitized codes, never credentials
-or raw filenames. Diagnostics expose typed technical values. When reporting a
-problem, copy the error code—not passwords or decrypted configuration.
+or raw filenames. The explicitly requested snapshot-content tree is the one place
+where stored relative filenames are displayed. Diagnostics expose typed technical
+values. When reporting a problem, copy the error code—not passwords, filenames,
+or decrypted configuration.
 
 Disabled actions usually mean that the selected project, SSH agent, rclone
 configuration, restic repository, or job state is not ready. An incomplete scan
@@ -154,7 +174,6 @@ identity/path values, never password arguments.
 
 ## Planned but inactive
 
-- restore of one selected file or subdirectory;
 - opt-in automation with power/network conditions;
 - controlled cancellation and interrupted-job recovery;
 - periodic sampled data checks;

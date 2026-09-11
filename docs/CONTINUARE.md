@@ -4,9 +4,10 @@ Last updated: 2026-09-11.
 
 ## Current implementation state
 
-- Phases 1–5b.1 are implemented: secure rclone unlock, typed D-Bus status/actions,
+- Phases 1–5b.2 are implemented: secure rclone unlock, typed D-Bus status/actions,
   controlled FUSE mount/unmount, project metadata monitoring, user-confirmed
-  append-only restic snapshots, bounded project history, and whole-snapshot restore.
+  append-only restic snapshots, bounded project history/content, and complete or
+  selective restore.
 - The GUI supports Romanian and English. Desktop locale selects the language;
   `--language ro|en` and `HETZNER_DRIVE_LANGUAGE` provide explicit overrides.
   Pinentry prompts are bilingual.
@@ -17,18 +18,21 @@ Last updated: 2026-09-11.
   key-path, and host-pin checks remain mandatory.
 - The SSH key defaults to `$HOME/.ssh/hetzner_storagebox`. A different key filename
   requires `HETZNER_DRIVE_SSH_KEY` or installer `--ssh-key`.
-- Snapshot history returns at most 256 newest entries. Restore accepts only a full
-  ID authorized for the selected project in the current unlocked session and
-  always writes into a new private directory.
+- Snapshot history returns at most 256 newest entries. Snapshot content captures
+  at most 4 MiB and exposes at most 2,048 regular-file/directory entries. Complete
+  and selective restore accept only the current session's authorized ID/path and
+  always write into a new private directory with verification.
 - Locking restic, locking rclone configuration, or restarting the service clears
-  the in-memory snapshot authorization catalog.
+  both in-memory snapshot and relative-path authorization catalogs.
 
 ## Latest verification
 
-- 39 Rust unit tests plus the real local synthetic `auth_flow` pass after the
-  public-release policy update.
-- 25 Python tests pass, including explicit English-interface and installer-policy
-  coverage.
+- 41 Rust unit tests plus the real local synthetic `auth_flow` pass. The local
+  restic/rclone integration now lists actual JSON content, restores one exact
+  wildcard-named file without its sibling, and restores a selected directory with
+  verification.
+- 26 Python tests pass, including explicit English-interface, installer-policy,
+  snapshot-entry schema/tree, and selective-request coverage.
 - Formatting, Clippy, debug/release builds, the isolated D-Bus smoke test, and the
   generic installer preview pass. The 49-file staged tree and ignore rules passed
   the public secret/identity scan; the owner selected the MIT license before the
@@ -38,6 +42,9 @@ Last updated: 2026-09-11.
 - Public repository `mihaiAndrei0406/KDE-DriveApp` now exists on `main`. GitHub
   confirmed initial revision `ebe1d5cc0175db132791c9461eefc0b3b7b7936e` and the
   MIT license file.
+- Phase 5b.2 has not been deployed to the installed user service or exercised
+  against the live disposable Hetzner snapshot. Those remain explicit manual
+  acceptance steps, not automatic follow-up actions.
 
 ## Local runtime state at the start of this change
 
@@ -50,15 +57,14 @@ Last updated: 2026-09-11.
 
 1. Keep the installed service on its last validated configuration until the owner
    explicitly previews and applies the documented public-policy migration.
-2. In a later session, visually validate live history with a disposable project,
-   then design phase 5b.2 selective file/subdirectory restore.
+2. In a later controlled session, visually validate live selective restore using
+   an existing disposable snapshot before enabling any automation.
 
 ## Planned features, still inactive
 
-1. Selective restore from a bounded `restic ls --json` tree.
-2. Actionable due-backup notification while retaining explicit confirmation.
-3. Controlled cancellation, child reap, and recovery validation.
-4. Power/network-aware scheduling that fails closed on unknown state.
-5. Rotating sampled data checks.
-6. Separately secured and audited retention; no forget/prune/delete exists in the
+1. Actionable due-backup notification while retaining explicit confirmation.
+2. Controlled cancellation, child reap, and recovery validation.
+3. Power/network-aware scheduling that fails closed on unknown state.
+4. Rotating sampled data checks.
+5. Separately secured and audited retention; no forget/prune/delete exists in the
    append-only client.

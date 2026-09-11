@@ -6,6 +6,8 @@ This is an evidence checkpoint, not a security certification. It covers static
 command/IPC/secret review, automated synthetic integration tests, the controlled
 live idle mount and disposable snapshot acceptance performed on 2026-09-10, and
 the public-source preparation performed on 2026-09-11.
+It also covers phase-5b.2 selective-restore static and local synthetic checks; no
+new live Hetzner restore was performed for that increment.
 
 No private key, decrypted configuration, password, or personal project content is
 included in the repository. Public-release work did not contact Hetzner or create,
@@ -16,7 +18,7 @@ delete, overwrite, forget, or prune remote data.
 | Area | Evidence | Result |
 | --- | --- | --- |
 | Privileges | Service rejects UID 0; FUSE uses the distribution helper | OK |
-| D-Bus | Typed fixed methods; no arbitrary command/path/remote execution | OK |
+| D-Bus | Typed fixed methods; selective relative paths require prior server authorization | OK |
 | Processes | Absolute executables, cleared environment, bounded output, timeout/reap | OK |
 | Config | Mode/owner/no-symlink checks and one sealed encrypted snapshot | OK |
 | Secrets | pinentry, one-shot peer-checked sockets, mlock/zeroize, no D-Bus/argv secret | OK within documented limits |
@@ -26,6 +28,7 @@ delete, overwrite, forget, or prune remote data.
 | Unmount | Two VFS observations, no force/lazy, mountinfo confirmation | OK live idle |
 | Backup | Fixed append-only repository/transport, one job, explicit confirmation | OK disposable fixture |
 | Restore | Server-validated snapshot catalog, `--verify`, new 0700 target | OK disposable fixture |
+| Selective restore | 4 MiB/2,048-entry typed listing, path catalog, escaped include, separate confirmation | OK local synthetic; live pending |
 | Public tree | Personal input documents ignored; account ID and absolute user paths removed | OK static scan |
 
 ## Findings
@@ -90,6 +93,8 @@ integration with the correct `--ssh-key`. Old restore directories remain intact.
   unload keys.
 - The append-only client intentionally cannot remove remote snapshots and has no
   retention policy.
+- Explicit snapshot-content requests expose bounded relative filenames on the
+  same-user session bus and in the GUI; they remain absent from event/progress logs.
 - A mounted drive, notification, or local scan is not proof of a verified backup.
 
 ## Verdict

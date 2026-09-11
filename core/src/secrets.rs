@@ -259,7 +259,7 @@ pub async fn prompt_restic_password(
     prompt(description, label, "backup_unlock_cancelled").await
 }
 
-pub async fn confirm_backup_action(restore: bool) -> Result<(), &'static str> {
+pub async fn confirm_backup_action(restore: bool, selective: bool) -> Result<(), &'static str> {
     let program = if Path::new("/usr/bin/pinentry-qt").is_file() {
         "/usr/bin/pinentry-qt"
     } else {
@@ -277,7 +277,9 @@ pub async fn confirm_backup_action(restore: bool) -> Result<(), &'static str> {
     let mut child = command.spawn().map_err(|_| "pinentry_unavailable")?;
     let mut input = child.stdin.take().ok_or("pinentry_protocol")?;
     let mut output = child.stdout.take().ok_or("pinentry_protocol")?;
-    let description = if restore {
+    let description = if selective {
+        "SETDESC Confirm restore of the SELECTED file or directory into a NEW local directory / Confirma restaurarea fisierului sau directorului SELECTAT intr-un director local NOU. Existing files are not overwritten or deleted / Fisierele existente nu sunt suprascrise sau sterse."
+    } else if restore {
         "SETDESC Confirm restore into a NEW local directory / Confirma restaurarea intr-un director local NOU. Existing files are not overwritten or deleted / Fisierele existente nu sunt suprascrise sau sterse."
     } else {
         "SETDESC Confirm backup to the disposable restic repository / Confirma backupul in repository-ul restic disposable. File contents will be read and uploaded encrypted / Continutul fisierelor va fi citit si incarcat criptat."

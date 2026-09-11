@@ -235,6 +235,32 @@ impl Service {
         }
     }
 
+    #[zbus(out_args("success", "truncated", "paths", "kinds", "sizes", "reason"))]
+    async fn get_snapshot_entries(
+        &self,
+        project_id: String,
+        snapshot_id: String,
+    ) -> (bool, bool, Vec<String>, Vec<String>, Vec<u64>, String) {
+        match self
+            .controller
+            .snapshot_entries(&project_id, &snapshot_id)
+            .await
+        {
+            Ok((entries, truncated)) => {
+                let mut paths = Vec::with_capacity(entries.len());
+                let mut kinds = Vec::with_capacity(entries.len());
+                let mut sizes = Vec::with_capacity(entries.len());
+                for entry in entries {
+                    paths.push(entry.path);
+                    kinds.push(entry.kind);
+                    sizes.push(entry.size);
+                }
+                (true, truncated, paths, kinds, sizes, "ok".into())
+            }
+            Err(reason) => (false, false, Vec::new(), Vec::new(), Vec::new(), reason),
+        }
+    }
+
     #[zbus(out_args("success", "code"))]
     async fn initialize_backup_repository(&self) -> (bool, String) {
         self.controller.initialize_backup_repository().await
@@ -263,6 +289,18 @@ impl Service {
     ) -> (bool, String) {
         self.controller
             .start_backup_restore(&project_id, &snapshot_id)
+            .await
+    }
+
+    #[zbus(out_args("success", "code"))]
+    async fn start_selective_restore(
+        &self,
+        project_id: String,
+        snapshot_id: String,
+        selected_path: String,
+    ) -> (bool, String) {
+        self.controller
+            .start_selective_restore(&project_id, &snapshot_id, &selected_path)
             .await
     }
 }

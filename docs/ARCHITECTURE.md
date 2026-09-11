@@ -13,7 +13,7 @@ failure-mode acceptance remain pending. See `UNMOUNT_DESIGN.md`,
 Python/PySide6 uses QtDBus on the session bus. Rust owns observations and validation.
 The bus name and interface are `ro.mihai.HetznerDrive1`, object
 `/ro/mihai/HetznerDrive1`. Methods have fixed arguments and fixed output types.
-No caller can supply an executable, shell snippet, remote or filesystem path.
+No caller can supply an executable, shell snippet, remote or absolute destination.
 
 `GetStatus` returns nine fields: application state, mount observation, SSH agent
 observation, config metadata observation, rclone version, mount path, allocated
@@ -24,10 +24,11 @@ enables the fixed read-only remote queries. Unknown space is never zero usage.
 Additional methods: UnlockConfiguration, LockConfiguration, MountDrive,
 UnmountDrive, CheckConnection, RunHealthCheck, OpenDrive, GetOperationStatus and
 GetMountActivity. Backup methods report typed status, initialize/unlock/lock the
-fixed repository, list a bounded project snapshot history, and start a backup or
-restore using a strict 32-hex project ID plus, for restore, a 64-hex snapshot ID
-previously authorized by that history. None accepts a password, command,
-filesystem path, remote or RC endpoint.
+fixed repository, list bounded project history and snapshot contents, and start
+backup, complete restore, or selective restore. Selective restore accepts a
+snapshot-relative path only after the exact project/snapshot/path tuple was emitted
+and retained in the service's current-session catalog. None accepts a password,
+command, absolute destination, remote, or RC endpoint.
 
 Actions share a single operation guard; competing actions return `operation_busy`.
 Explicit SSH and health checks refresh local observations. A failed authenticated
@@ -86,13 +87,20 @@ Initialization asks for the restic password twice. Unlock validates it with a
 bounded metadata listing; lock drops the session secret. Backup uses one filesystem,
 fixed tags and the registry exclusions, emits only bounded numeric progress, and
 is followed by `restic check --with-cache`. Only then, and only if the GUI scan
-digest is unchanged, is local activity marked verified. Restore addresses the
-exact full snapshot ID plus original project subpath, uses `--verify`, and writes
-only to a newly created 0700 directory below `$HOME/HetznerDrive-Restores`.
+digest is unchanged, is local activity marked verified. Complete restore addresses
+the exact full snapshot ID plus original project subpath. Selective restore parses
+a maximum 4 MiB newline-delimited JSON response, keeps at most 2,048 regular-file/
+directory entries, rejects paths outside the exact project root and excludes
+symlinks/special nodes from direct selection. A selected directory is restored
+with all archived descendants, which may include symlinks. The chosen relative
+path is matched through an escaped restic include pattern. Both modes use
+`--verify` and write only to a newly created 0700 directory below
+`$HOME/HetznerDrive-Restores`.
 History calls query at most 257 recent candidates and expose at most 256 entries
-after an exact path plus application/project-tag filter. Only the full IDs in the
-current per-project session catalog can be restored; repository lock clears that
-catalog, so history is reloaded after restart or unlock.
+after an exact path plus application/project-tag filter. Only full IDs and
+selective paths in the current per-project session catalogs can be restored;
+repository/configuration lock or service exit clears both catalogs, so history
+and contents are reloaded after restart or unlock.
 Only one restic job can run. The command surface contains no forget, prune, delete
 or user-selected remote; retention remains a future phase.
 

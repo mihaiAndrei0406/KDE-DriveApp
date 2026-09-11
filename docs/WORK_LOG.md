@@ -163,3 +163,29 @@ could reveal operational metadata.
   `mihaiAndrei0406/KDE-DriveApp` on `main`. GitHub returned the same revision and
   the expected MIT license file. No service, mount, credentials, or remote backup
   data was changed.
+
+## 2026-09-11 — Phase 5b.2 selective restore
+
+- Added typed `GetSnapshotEntries` and `StartSelectiveRestore` D-Bus methods.
+  Snapshot listing is repository-backed, limited to 4 MiB and 2,048 displayed
+  regular-file/directory entries, and must match the exact registered project,
+  authorized snapshot ID, application tag, and project tag.
+- Rust rejects absolute/traversing/control-character paths, paths outside the
+  snapshot project root, duplicate entries, invalid JSON/schema, stale tuples,
+  and direct symlink/special-node selection. A selected directory restores all
+  archived descendants, including possible symlinks, only into the new target.
+  The separate path catalog is cleared with the snapshot catalog on restic/
+  configuration lock or service exit.
+- Selective restore derives its root and destination internally, escapes restic
+  pattern metacharacters, never uses `--delete`, always creates a fresh 0700
+  target, runs `--verify`, and requires a distinct bilingual pinentry confirmation.
+- Added a bilingual hierarchical snapshot-content view, reload/error/truncation
+  states, complete-versus-selective restore actions, defensive Qt decoding, and
+  a GUI warning showing the selected relative path. Filenames are displayed only
+  on explicit request and remain absent from progress and event logs.
+- Final checkpoint: 41 Rust unit tests plus synthetic `auth_flow`, 26 Python tests,
+  formatting, Clippy, offline debug/release builds, real local exact-file and
+  directory restore, and the isolated D-Bus selective flow pass. The English
+  catalog audit checked 205 UI strings with no gap; the final public-tree scan
+  found no personal path, real account ID, private key, GitHub token, or credential.
+  No live Hetzner operation or installed-service change occurred.

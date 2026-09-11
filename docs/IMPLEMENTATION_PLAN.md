@@ -40,8 +40,12 @@
   confirmation, bounded numeric progress, post-snapshot repository checking and
   verified restore into a new directory. Increment 5b.1 adds bounded,
   repository-backed project history and restore selection that survives service
-  restarts after the repository is unlocked again. Live acceptance passed on one
-  151-byte disposable fixture. Phase 5c and destructive retention remain disabled.
+  restarts after the repository is unlocked again. Increment 5b.2 adds a bounded
+  typed snapshot-content tree and verified restore of one server-authorized file
+  or subdirectory into a new private destination. Local synthetic acceptance
+  covers exact-file, wildcard-escaping and complete selected-directory paths. Live
+  acceptance passed previously on one 151-byte disposable whole-restore fixture.
+  Phase 5c and destructive retention remain disabled.
 
 ## User workflow
 
@@ -60,32 +64,34 @@ channel, queries only the registered project tag/path and returns at most 256 ty
 entries. Restore accepts only a full ID from the current project's server-validated
 session catalog; repository lock clears the catalog.
 
+Completed 5b.2: `restic ls --json --recursive` is capped at 4 MiB and 2,048
+regular-file/directory entries. Paths must remain relative to the exact registered
+snapshot root and are stored in a second session catalog. Selective restore escapes
+restic pattern characters, requires explicit confirmation and uses the same new
+0700 target plus `--verify` policy as complete restore.
+
 ## Proposed next increments
 
-1. **5b.2 — Selective restore (high value, medium risk).** Show a bounded tree from
-   `restic ls --json` and restore one selected file/subdirectory into a new private
-   destination. Paths must originate from restic output, remain snapshot-relative
-   and never become arbitrary D-Bus filesystem inputs.
-2. **5c.1 — Actionable due notification (high value, low risk).** The existing
+1. **5c.1 — Actionable due notification (high value, low risk).** The existing
    reminder opens the project and offers a one-click request, but the service still
    requires explicit pinentry confirmation. Add per-project time windows and cooldowns before
    considering unattended execution.
-3. **5c.2 — Controlled cancellation and recovery (high value, medium risk).** Keep
+2. **5c.2 — Controlled cancellation and recovery (high value, medium risk).** Keep
    the exact restic child handle, request graceful interruption, reap it, report an
    unverified result and validate repository metadata before the next backup.
-4. **5c.3 — Power/network-aware scheduling (medium value, medium risk).** Use typed
+3. **5c.3 — Power/network-aware scheduling (medium value, medium risk).** Use typed
    UPower and NetworkManager D-Bus properties to avoid battery or metered links;
    unknown state must block automation rather than assume it is safe.
-5. **5c.4 — Periodic data sampling (high assurance, medium bandwidth).** Schedule
+4. **5c.4 — Periodic data sampling (high assurance, medium bandwidth).** Schedule
    read-only `restic check --read-data-subset` slices, record only aggregate results
    and rotate through all subsets over time.
-6. **Maintenance phase — Retention (useful, high risk).** Keep it outside the
+5. **Maintenance phase — Retention (useful, high risk).** Keep it outside the
    append-only backup client. Start with a read-only/dry-run proposal and require a
    separately secured maintenance context plus explicit audit before any
    forget/prune/delete capability.
 
-Selective restore should precede unattended automation; repository-backed history
-already makes whole-project recovery usable across service restarts.
+Selective restore now precedes unattended automation; repository-backed history
+makes complete and targeted recovery usable across service restarts after reload.
 
 ## Current limitations and assumptions
 

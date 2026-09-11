@@ -1,13 +1,14 @@
 import os
 import unittest
+from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, Signal, Qt
 from PySide6.QtGui import QColor, QPalette
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 from hetzner_drive.app import DARK_THEME, LIGHT_THEME, DriveWindow, STATE_LABELS, theme_for_palette
-from hetzner_drive.client import decode_snapshot_history, decode_status
+from hetzner_drive.client import decode_snapshot_entries, decode_snapshot_history, decode_status
 from hetzner_drive.projects import ProjectStatus
 
 
@@ -25,11 +26,14 @@ class FakeClient(QObject):
         bool, bool, bool, bool, str, str, object, object, object, object, str, str, str
     )
     snapshot_history_received = Signal(str, bool, bool, object, str)
+    snapshot_entries_received = Signal(str, str, bool, bool, object, str)
 
     def __init__(self):
         super().__init__()
         self.history_requests = []
+        self.entry_requests = []
         self.restore_requests = []
+        self.selective_restore_requests = []
 
     def refresh(self):
         pass
@@ -79,8 +83,14 @@ class FakeClient(QObject):
     def get_project_snapshots(self, project_id):
         self.history_requests.append(project_id)
 
+    def get_snapshot_entries(self, project_id, snapshot_id):
+        self.entry_requests.append((project_id, snapshot_id))
+
     def start_backup_restore(self, project_id, snapshot_id):
         self.restore_requests.append((project_id, snapshot_id))
+
+    def start_selective_restore(self, project_id, snapshot_id, selected_path):
+        self.selective_restore_requests.append((project_id, snapshot_id, selected_path))
 
 
 class EmptyProjectMonitor:
@@ -139,6 +149,7 @@ class GuiTests(unittest.TestCase):
         try:
             self.assertEqual(window.refresh_button.text(), "Refresh")
             self.assertEqual(window.tabs.tabText(window.backup_tab_index), "Backups")
+            self.assertEqual(window.restore_selection_button.text(), "Restore selection")
             window.apply_status(self.status("Ready"))
             self.assertEqual(window.state_label.text(), "Ready")
             self.assertIn("authentication not verified", window.values["storage"].text())
@@ -234,8 +245,36 @@ class GuiTests(unittest.TestCase):
             "ok",
         )
         self.assertTrue(self.window.restore_backup_button.isEnabled())
+        self.assertEqual(self.window.client.entry_requests, [("a" * 32, "b" * 64)])
         self.window.restore_selected_backup()
         self.assertEqual(self.window.client.restore_requests, [("a" * 32, "b" * 64)])
+        self.window.apply_snapshot_entries(
+            "a" * 32,
+            "b" * 64,
+            True,
+            False,
+            [
+                {"path": "src", "kind": "dir", "size": 0},
+                {"path": "src/main.rs", "kind": "file", "size": 42},
+            ],
+            "ok",
+        )
+        directory = self.window.snapshot_contents_tree.topLevelItem(0)
+        self.assertEqual(directory.data(0, Qt.ItemDataRole.UserRole), "src")
+        self.assertEqual(directory.childCount(), 1)
+        self.window.snapshot_contents_tree.setCurrentItem(directory.child(0))
+        self.app.processEvents()
+        self.assertTrue(self.window.restore_selection_button.isEnabled())
+        with mock.patch.object(
+            QMessageBox,
+            "warning",
+            return_value=QMessageBox.StandardButton.Yes,
+        ):
+            self.window.restore_selected_entry()
+        self.assertEqual(
+            self.window.client.selective_restore_requests,
+            [("a" * 32, "b" * 64, "src/main.rs")],
+        )
 
     def test_snapshot_history_schema_requires_aligned_safe_entries(self):
         decoded = decode_snapshot_history([
@@ -256,6 +295,22 @@ class GuiTests(unittest.TestCase):
             decode_snapshot_history([
                 True, False, ["a" * 64], [], [3], [1024], "ok"
             ])
+
+    def test_snapshot_entry_schema_rejects_arbitrary_or_unaligned_paths(self):
+        decoded = decode_snapshot_entries([
+            True,
+            False,
+            ["src", "src/main.rs"],
+            ["dir", "file"],
+            [0, 42],
+            "ok",
+        ])
+        self.assertEqual(decoded[2][1]["path"], "src/main.rs")
+        for path in ("../escape", "/absolute", "src//file", "line\nbreak"):
+            with self.assertRaises(ValueError):
+                decode_snapshot_entries([True, False, [path], ["file"], [1], "ok"])
+        with self.assertRaises(ValueError):
+            decode_snapshot_entries([True, False, ["safe"], [], [1], "ok"])
 
     def test_disconnect_invalidates_stale_status(self):
         self.window.apply_status(self.status("Mounted"))
