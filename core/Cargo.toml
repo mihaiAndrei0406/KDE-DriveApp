@@ -1,0 +1,23 @@
+[package]
+name = "hetzner-drive-core"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+async-trait = "0.1"
+libc = "0.2"
+configparser = "3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "time", "signal", "sync", "net"] }
+zeroize = "1"
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+bcrypt = "0.17.1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[[test]]
+name = "auth_flow"
+harness = false

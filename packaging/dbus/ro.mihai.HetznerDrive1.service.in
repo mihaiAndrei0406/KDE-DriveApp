@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=ro.mihai.HetznerDrive1
+Exec="@PROJECT_ROOT@/target/release/hetzner-drive-core"
+SystemdService=hetzner-drive.service

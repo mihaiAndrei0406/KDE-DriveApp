@@ -1,0 +1,21 @@
+[Unit]
+Description=Hetzner Drive encrypted storage controller
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=dbus
+BusName=ro.mihai.HetznerDrive1
+ExecStart="@PROJECT_ROOT@/target/release/hetzner-drive-core"
+Environment="HETZNER_DRIVE_SSH_KEY=@SSH_KEY@"
+Environment="HETZNER_DRIVE_SFTP_HOST=@SFTP_HOST@"
+Environment="HETZNER_DRIVE_SFTP_USER=@SFTP_USER@"
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=5min
+UMask=0077
+LimitCORE=0
+KeyringMode=private
+
+[Install]
+WantedBy=graphical-session.target

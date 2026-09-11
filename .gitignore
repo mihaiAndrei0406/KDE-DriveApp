@@ -1,0 +1,12 @@
+.venv/
+.uv-cache/
+target/
+.agents/
+.codex/
+documentatii/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+dist/
+*.log

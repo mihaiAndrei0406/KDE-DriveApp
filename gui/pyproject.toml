@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling>=1.27,<2", "editables>=0.5,<1"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hetzner-drive-gui"
+version = "0.1.0"
+description = "Native Qt client for the Hetzner Drive user service"
+requires-python = ">=3.13,<3.14"
+dependencies = ["PySide6>=6.8,<7"]
+
+[project.optional-dependencies]
+dev = ["hatchling>=1.27,<2", "editables>=0.5,<1"]
+
+[project.scripts]
+hetzner-drive = "hetzner_drive.app:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hetzner_drive"]

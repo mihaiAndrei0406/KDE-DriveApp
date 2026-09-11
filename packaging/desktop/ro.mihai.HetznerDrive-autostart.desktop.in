@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Hetzner Drive
+Exec="@PROJECT_ROOT@/.venv/bin/hetzner-drive" --tray
+Icon=drive-harddisk
+Terminal=false
+Hidden=true

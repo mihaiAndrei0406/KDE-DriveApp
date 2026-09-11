@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Hetzner Drive
+Comment=Encrypted drive status
+Comment[ro]=Starea drive-ului criptat
+Exec="@PROJECT_ROOT@/.venv/bin/hetzner-drive"
+Icon=drive-harddisk
+Terminal=false
+Categories=Utility;
+StartupNotify=true
