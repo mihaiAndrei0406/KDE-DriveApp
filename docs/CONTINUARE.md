@@ -41,7 +41,9 @@ Last updated: 2026-09-11.
   This public-release work does not authorize or perform another remote write.
 - Public repository `mihaiAndrei0406/KDE-DriveApp` now exists on `main`. GitHub
   confirmed initial revision `ebe1d5cc0175db132791c9461eefc0b3b7b7936e` and the
-  MIT license file.
+  MIT license file. Selective-restore feature revision
+  `d2a41d3f97583e5af310f54cc878f3e1f8e5d385` was also confirmed on the public
+  branch.
 - Phase 5b.2 has not been deployed to the installed user service or exercised
   against the live disposable Hetzner snapshot. Those remain explicit manual
   acceptance steps, not automatic follow-up actions.

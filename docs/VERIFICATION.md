@@ -82,6 +82,9 @@ in `WORK_LOG.md`.
   public `main` branch at `mihaiAndrei0406/KDE-DriveApp`. The GitHub API returned
   the same revision and confirmed the 1,069-byte MIT `LICENSE` file. No ignored
   local artifact was included.
+- Selective-restore commit `d2a41d3f97583e5af310f54cc878f3e1f8e5d385`
+  was pushed to the same public `main` branch. GitHub returned that exact revision
+  and `PUBLIC` visibility after the push.
 
 ## Failures encountered and resolved
 
